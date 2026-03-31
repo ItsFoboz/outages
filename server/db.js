@@ -1,22 +1,19 @@
-import Database from "better-sqlite3";
+import { createClient } from "@libsql/client";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// On Vercel, only /tmp is writable. The DB is ephemeral (wiped on cold-start)
-// but the Vercel Cron job re-populates it every 30 minutes via POST /api/refresh.
-const DB_PATH = process.env.VERCEL
-  ? "/tmp/outages.db"
-  : join(__dirname, "..", "outages.db");
 
-const db = new Database(DB_PATH);
+// On Vercel only /tmp is writable. The DB is ephemeral (wiped on cold-start);
+// Vercel Cron re-populates it every 30 min via POST /api/refresh.
+const DB_URL = process.env.VERCEL
+  ? "file:/tmp/outages.db"
+  : `file:${join(__dirname, "..", "outages.db")}`;
 
-// Enable WAL mode for better concurrent read performance
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+const db = createClient({ url: DB_URL });
 
-// Create tables
-db.exec(`
+// Initialize schema. Top-level await is valid in ESM (Node 16+).
+await db.executeMultiple(`
   CREATE TABLE IF NOT EXISTS outages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL,
@@ -36,7 +33,6 @@ db.exec(`
     geocoded INTEGER DEFAULT 0,
     geocode_query TEXT
   );
-
   CREATE TABLE IF NOT EXISTS scrape_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT,
@@ -45,7 +41,6 @@ db.exec(`
     scraped_at TEXT DEFAULT (datetime('now')),
     record_count INTEGER
   );
-
   CREATE INDEX IF NOT EXISTS idx_outages_type ON outages(type);
   CREATE INDEX IF NOT EXISTS idx_outages_region ON outages(region);
   CREATE INDEX IF NOT EXISTS idx_outages_status ON outages(status);

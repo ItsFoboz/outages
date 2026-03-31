@@ -21,7 +21,7 @@ const SCRAPERS = [
   { name: "Avarii.bg", fn: scrapeAvarii },
 ];
 
-const DELAY_MS = 2500; // 2.5 seconds between scrapers
+const DELAY_MS = 2500;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -32,52 +32,54 @@ function sleep(ms) {
  * If exists → update scraped_at and status only.
  * If new → insert.
  */
-function upsertOutage(outage) {
-  const existing = db
-    .prepare(
-      `SELECT id FROM outages
-       WHERE provider = ?
-         AND start_time = ?
-         AND neighborhoods = ?
-       LIMIT 1`
-    )
-    .get(outage.provider, outage.start_time || "", outage.neighborhoods || "");
+async function upsertOutage(outage) {
+  const { rows } = await db.execute({
+    sql: `SELECT id FROM outages
+          WHERE provider = ?
+            AND start_time = ?
+            AND neighborhoods = ?
+          LIMIT 1`,
+    args: [outage.provider, outage.start_time || "", outage.neighborhoods || ""],
+  });
 
-  if (existing) {
-    db.prepare(
-      `UPDATE outages
-       SET scraped_at = datetime('now'), status = ?
-       WHERE id = ?`
-    ).run(outage.status || "active", existing.id);
+  if (rows.length > 0) {
+    await db.execute({
+      sql: `UPDATE outages
+            SET scraped_at = datetime('now'), status = ?
+            WHERE id = ?`,
+      args: [outage.status || "active", rows[0].id],
+    });
     return "updated";
   } else {
-    db.prepare(
-      `INSERT INTO outages
-         (provider, type, region, city, neighborhoods, description,
-          start_time, end_time, status, source_url, raw_html)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      outage.provider,
-      outage.type,
-      outage.region,
-      outage.city || null,
-      outage.neighborhoods || null,
-      outage.description || null,
-      outage.start_time || null,
-      outage.end_time || null,
-      outage.status || "active",
-      outage.source_url || null,
-      outage.raw_html || null
-    );
+    await db.execute({
+      sql: `INSERT INTO outages
+              (provider, type, region, city, neighborhoods, description,
+               start_time, end_time, status, source_url, raw_html)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        outage.provider,
+        outage.type,
+        outage.region,
+        outage.city || null,
+        outage.neighborhoods || null,
+        outage.description || null,
+        outage.start_time || null,
+        outage.end_time || null,
+        outage.status || "active",
+        outage.source_url || null,
+        outage.raw_html || null,
+      ],
+    });
     return "inserted";
   }
 }
 
-function logScrape(source, status, errorMessage, recordCount) {
-  db.prepare(
-    `INSERT INTO scrape_log (source, status, error_message, record_count)
-     VALUES (?, ?, ?, ?)`
-  ).run(source, status, errorMessage || null, recordCount || 0);
+async function logScrape(source, status, errorMessage, recordCount) {
+  await db.execute({
+    sql: `INSERT INTO scrape_log (source, status, error_message, record_count)
+          VALUES (?, ?, ?, ?)`,
+    args: [source, status, errorMessage || null, recordCount || 0],
+  });
 }
 
 export async function runAllScrapers() {
@@ -91,25 +93,23 @@ export async function runAllScrapers() {
       let updated = 0;
 
       for (const outage of outages) {
-        const result = upsertOutage(outage);
+        const result = await upsertOutage(outage);
         if (result === "inserted") inserted++;
         else updated++;
       }
 
-      logScrape(scraper.name, "ok", null, outages.length);
+      await logScrape(scraper.name, "ok", null, outages.length);
       console.log(
         `[scheduler] ${scraper.name}: ${outages.length} records (${inserted} new, ${updated} updated)`
       );
     } catch (err) {
       console.error(`[scheduler] ${scraper.name} failed:`, err.message);
-      logScrape(scraper.name, "error", err.message, 0);
+      await logScrape(scraper.name, "error", err.message, 0);
     }
 
-    // Polite delay between scrapers
     await sleep(DELAY_MS + Math.random() * 1000);
   }
 
-  // Geocode any new outages
   await geocodePending();
 
   console.log(`[scheduler] Scrape cycle complete at ${new Date().toISOString()}`);

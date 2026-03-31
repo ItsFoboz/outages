@@ -49,16 +49,13 @@ export function buildGeocodeQuery(zoneText, region) {
     .replace(/ремонт.*$/gi, "")
     .trim();
 
-  // Extract first meaningful location token
   let firstLocation = cleaned.split(",")[0].trim();
 
-  // If it contains specific location markers, prioritise those
   const kvMatch = cleaned.match(/(кв\.|жк\.?|ул\.|бул\.)[^,;]+/i);
   if (kvMatch) {
     firstLocation = kvMatch[0].trim();
   }
 
-  // If it mentions a municipality
   const opshtina = cleaned.match(/община\s+([А-ЯЙа-яй\s]+)/i);
   if (opshtina) {
     firstLocation = `Община ${opshtina[1].trim()}`;
@@ -68,7 +65,6 @@ export function buildGeocodeQuery(zoneText, region) {
       : `${firstLocation}, България`;
   }
 
-  // If it mentions a city (гр.)
   const grMatch = cleaned.match(/гр\.\s*([А-ЯЙа-яй\s]+)/i);
   if (grMatch) {
     return `${grMatch[1].trim()}, България`;
@@ -82,7 +78,7 @@ export function buildGeocodeQuery(zoneText, region) {
 
 /**
  * Geocode all outages that haven't been geocoded yet.
- * Skips if no API key configured.
+ * Skips entirely if no API key is configured.
  */
 export async function geocodePending() {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -91,11 +87,9 @@ export async function geocodePending() {
     return;
   }
 
-  const pending = db
-    .prepare(
-      "SELECT id, neighborhoods, description, region FROM outages WHERE geocoded = 0"
-    )
-    .all();
+  const { rows: pending } = await db.execute(
+    "SELECT id, neighborhoods, description, region FROM outages WHERE geocoded = 0"
+  );
 
   if (pending.length === 0) return;
   console.log(`[geocoder] Geocoding ${pending.length} pending outages…`);
@@ -107,10 +101,10 @@ export async function geocodePending() {
     );
 
     if (!query) {
-      db.prepare("UPDATE outages SET geocoded=2, geocode_query=? WHERE id=?").run(
-        "no-query-built",
-        row.id
-      );
+      await db.execute({
+        sql: "UPDATE outages SET geocoded=2, geocode_query=? WHERE id=?",
+        args: ["no-query-built", row.id],
+      });
       continue;
     }
 
@@ -127,20 +121,24 @@ export async function geocodePending() {
 
       if (response.data.results.length > 0) {
         const { lat, lng } = response.data.results[0].geometry.location;
-        db.prepare(
-          "UPDATE outages SET lat=?, lng=?, geocoded=1, geocode_query=? WHERE id=?"
-        ).run(lat, lng, query, row.id);
+        await db.execute({
+          sql: "UPDATE outages SET lat=?, lng=?, geocoded=1, geocode_query=? WHERE id=?",
+          args: [lat, lng, query, row.id],
+        });
       } else {
-        db.prepare(
-          "UPDATE outages SET geocoded=2, geocode_query=? WHERE id=?"
-        ).run(query, row.id);
+        await db.execute({
+          sql: "UPDATE outages SET geocoded=2, geocode_query=? WHERE id=?",
+          args: [query, row.id],
+        });
       }
     } catch (err) {
       console.error(`[geocoder] Failed for id=${row.id}: ${err.message}`);
-      db.prepare("UPDATE outages SET geocoded=2 WHERE id=?").run(row.id);
+      await db.execute({
+        sql: "UPDATE outages SET geocoded=2 WHERE id=?",
+        args: [row.id],
+      });
     }
 
-    // Polite delay to stay within rate limits
     await new Promise((r) => setTimeout(r, 200));
   }
 

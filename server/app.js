@@ -9,8 +9,8 @@ const app = express();
 app.use(express.json());
 app.use(
   cors({
-    // In production (Vercel) allow all origins since frontend + backend share
-    // the same domain. In dev allow the Vite port.
+    // In production (Vercel) allow all origins — frontend + backend share
+    // the same domain. In dev allow the Vite dev port only.
     origin: process.env.VERCEL
       ? true
       : [
@@ -23,40 +23,40 @@ app.use(
 
 // GET /api/outages
 // Query params: type, region, status (default active+planned)
-app.get("/api/outages", (req, res) => {
+app.get("/api/outages", async (req, res) => {
   const { type, region, status } = req.query;
 
-  let query = `
+  let sql = `
     SELECT id, provider, type, region, city, neighborhoods,
            description, start_time, end_time, status, source_url,
            scraped_at, lat, lng, geocoded
     FROM outages
     WHERE 1=1
   `;
-  const params = [];
+  const args = [];
 
   if (type && type !== "all") {
-    query += " AND type = ?";
-    params.push(type);
+    sql += " AND type = ?";
+    args.push(type);
   }
 
   if (region && region !== "all") {
-    query += " AND (region LIKE ? OR city LIKE ?)";
-    params.push(`%${region}%`, `%${region}%`);
+    sql += " AND (region LIKE ? OR city LIKE ?)";
+    args.push(`%${region}%`, `%${region}%`);
   }
 
   if (status) {
     const statuses = status.split(",");
-    query += ` AND status IN (${statuses.map(() => "?").join(",")})`;
-    params.push(...statuses);
+    sql += ` AND status IN (${statuses.map(() => "?").join(",")})`;
+    args.push(...statuses);
   } else {
-    query += " AND status IN ('active','planned')";
+    sql += " AND status IN ('active','planned')";
   }
 
-  query += " ORDER BY scraped_at DESC, start_time DESC LIMIT 500";
+  sql += " ORDER BY scraped_at DESC, start_time DESC LIMIT 500";
 
   try {
-    const rows = db.prepare(query).all(...params);
+    const { rows } = await db.execute({ sql, args });
     res.json(rows);
   } catch (err) {
     console.error("[api] /api/outages error:", err);
@@ -65,33 +65,31 @@ app.get("/api/outages", (req, res) => {
 });
 
 // GET /api/outages/summary
-app.get("/api/outages/summary", (req, res) => {
+app.get("/api/outages/summary", async (req, res) => {
   try {
-    const byType = db
-      .prepare(
+    const [byTypeResult, byRegionResult, totalResult] = await Promise.all([
+      db.execute(
         `SELECT type, COUNT(*) as count FROM outages
          WHERE status IN ('active','planned')
          GROUP BY type`
-      )
-      .all();
-
-    const byRegion = db
-      .prepare(
+      ),
+      db.execute(
         `SELECT region, COUNT(*) as count FROM outages
          WHERE status IN ('active','planned')
          GROUP BY region
          ORDER BY count DESC
          LIMIT 20`
-      )
-      .all();
-
-    const total = db
-      .prepare(
+      ),
+      db.execute(
         "SELECT COUNT(*) as count FROM outages WHERE status IN ('active','planned')"
-      )
-      .get();
+      ),
+    ]);
 
-    res.json({ byType, byRegion, total: total.count });
+    res.json({
+      byType: byTypeResult.rows,
+      byRegion: byRegionResult.rows,
+      total: Number(totalResult.rows[0]?.count ?? 0),
+    });
   } catch (err) {
     console.error("[api] /api/outages/summary error:", err);
     res.status(500).json({ error: "Database error" });
@@ -99,18 +97,16 @@ app.get("/api/outages/summary", (req, res) => {
 });
 
 // GET /api/outages/map — geocoded outages only
-app.get("/api/outages/map", (req, res) => {
+app.get("/api/outages/map", async (req, res) => {
   try {
-    const rows = db
-      .prepare(
-        `SELECT id, provider, type, region, city, neighborhoods,
-                description, start_time, end_time, status, lat, lng
-         FROM outages
-         WHERE geocoded = 1
-           AND status IN ('active','planned')
-         ORDER BY scraped_at DESC`
-      )
-      .all();
+    const { rows } = await db.execute(
+      `SELECT id, provider, type, region, city, neighborhoods,
+              description, start_time, end_time, status, lat, lng
+       FROM outages
+       WHERE geocoded = 1
+         AND status IN ('active','planned')
+       ORDER BY scraped_at DESC`
+    );
     res.json(rows);
   } catch (err) {
     console.error("[api] /api/outages/map error:", err);
@@ -119,15 +115,13 @@ app.get("/api/outages/map", (req, res) => {
 });
 
 // GET /api/scrape-log — last 50 events
-app.get("/api/scrape-log", (req, res) => {
+app.get("/api/scrape-log", async (req, res) => {
   try {
-    const rows = db
-      .prepare(
-        `SELECT * FROM scrape_log
-         ORDER BY scraped_at DESC
-         LIMIT 50`
-      )
-      .all();
+    const { rows } = await db.execute(
+      `SELECT * FROM scrape_log
+       ORDER BY scraped_at DESC
+       LIMIT 50`
+    );
     res.json(rows);
   } catch (err) {
     console.error("[api] /api/scrape-log error:", err);
@@ -136,7 +130,7 @@ app.get("/api/scrape-log", (req, res) => {
 });
 
 // POST /api/refresh — trigger scrape cycle
-// On Vercel this is also the Vercel Cron target (replaces node-cron).
+// On Vercel this is the Vercel Cron target (replaces node-cron).
 app.post("/api/refresh", async (req, res) => {
   try {
     res.json({ message: "Scrape cycle started" });
@@ -150,7 +144,7 @@ app.post("/api/refresh", async (req, res) => {
 });
 
 // Health check
-app.get("/api/health", (req, res) => {
+app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", ts: new Date().toISOString() });
 });
 
