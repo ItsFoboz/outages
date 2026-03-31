@@ -6,17 +6,42 @@ import { runAllScrapers } from "./scheduler.js";
 
 const app = express();
 
-// Ensure schema exists before any request is handled.
-// initDb() is idempotent and resolves immediately after first call.
-app.use((_req, _res, next) => {
-  initDb().then(() => next()).catch(next);
+// ── Readiness gate ────────────────────────────────────────────────────────────
+// On Vercel every cold-start produces an empty /tmp SQLite DB.
+// We block ALL requests until the DB schema exists AND (if the DB is empty)
+// a full scrape has completed. maxDuration is 60 s in vercel.json, which is
+// enough for one scrape cycle.
+let _readiness = null;
+
+function getReadiness() {
+  if (!_readiness) {
+    _readiness = (async () => {
+      await initDb();
+      const { rows } = await db.execute(
+        "SELECT COUNT(*) as count FROM outages"
+      );
+      if (Number(rows[0].count) === 0) {
+        console.log("[app] DB empty — running initial scrape…");
+        await runAllScrapers();
+        console.log("[app] Initial scrape complete.");
+      }
+    })().catch((err) => {
+      // Reset so the next request retries
+      _readiness = null;
+      throw err;
+    });
+  }
+  return _readiness;
+}
+
+app.use((req, _res, next) => {
+  getReadiness().then(() => next()).catch(next);
 });
 
+// ── Middleware ────────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(
   cors({
-    // In production (Vercel) allow all origins — frontend + backend share
-    // the same domain. In dev allow the Vite dev port only.
     origin: process.env.VERCEL
       ? true
       : [
@@ -27,8 +52,9 @@ app.use(
   })
 );
 
+// ── Routes ────────────────────────────────────────────────────────────────────
+
 // GET /api/outages
-// Query params: type, region, status (default active+planned)
 app.get("/api/outages", async (req, res) => {
   const { type, region, status } = req.query;
 
@@ -120,13 +146,11 @@ app.get("/api/outages/map", async (req, res) => {
   }
 });
 
-// GET /api/scrape-log — last 50 events
+// GET /api/scrape-log
 app.get("/api/scrape-log", async (req, res) => {
   try {
     const { rows } = await db.execute(
-      `SELECT * FROM scrape_log
-       ORDER BY scraped_at DESC
-       LIMIT 50`
+      `SELECT * FROM scrape_log ORDER BY scraped_at DESC LIMIT 50`
     );
     res.json(rows);
   } catch (err) {
@@ -135,17 +159,16 @@ app.get("/api/scrape-log", async (req, res) => {
   }
 });
 
-// POST /api/refresh — trigger scrape cycle
-// On Vercel this is the Vercel Cron target (replaces node-cron).
+// POST /api/refresh — synchronous scrape (awaited before responding).
+// On Vercel serverless, fire-and-forget is killed when the response is sent,
+// so we must await the full cycle here. maxDuration: 60 s covers this.
 app.post("/api/refresh", async (req, res) => {
   try {
-    res.json({ message: "Scrape cycle started" });
-    runAllScrapers().catch((e) =>
-      console.error("[api] Manual refresh error:", e)
-    );
+    await runAllScrapers();
+    res.json({ message: "Scrape cycle complete" });
   } catch (err) {
     console.error("[api] /api/refresh error:", err);
-    res.status(500).json({ error: "Failed to start scrape" });
+    res.status(500).json({ error: "Scrape failed", detail: err.message });
   }
 });
 

@@ -63,11 +63,22 @@ export default function App() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
+  const [scraping, setScraping] = useState(false);
+
   const handleManualRefresh = async () => {
-    // Trigger backend scrape cycle
-    fetch("/api/refresh", { method: "POST" }).catch(() => {});
-    // Reload data after a short delay to allow scrape to start
-    setTimeout(() => fetchData(), 2000);
+    setScraping(true);
+    setLoading(true);
+    try {
+      // POST /api/refresh is synchronous — it awaits the full scrape cycle
+      // before responding, so we can fetch fresh data immediately after.
+      await fetch("/api/refresh", { method: "POST" });
+      await fetchData(true);
+    } catch {
+      // ignore — fetchData sets error state
+    } finally {
+      setScraping(false);
+      setLoading(false);
+    }
   };
 
   const formatLastUpdated = () => {
@@ -174,7 +185,7 @@ export default function App() {
               )}
               <button
                 onClick={handleManualRefresh}
-                disabled={loading}
+                disabled={loading || scraping}
                 style={{
                   background: "rgba(255,255,255,0.06)",
                   border: "1px solid rgba(255,255,255,0.1)",
@@ -182,12 +193,12 @@ export default function App() {
                   borderRadius: 6,
                   padding: "5px 12px",
                   fontSize: 12,
-                  cursor: loading ? "not-allowed" : "pointer",
-                  opacity: loading ? 0.5 : 1,
+                  cursor: (loading || scraping) ? "not-allowed" : "pointer",
+                  opacity: (loading || scraping) ? 0.5 : 1,
                   transition: "all 0.15s",
                 }}
               >
-                {loading ? "…" : "↻ Обнови"}
+                {scraping ? "Събира данни…" : loading ? "…" : "↻ Обнови"}
               </button>
             </div>
           </div>
