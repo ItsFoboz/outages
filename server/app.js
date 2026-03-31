@@ -1,10 +1,16 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import db from "./db.js";
+import db, { initDb } from "./db.js";
 import { runAllScrapers } from "./scheduler.js";
 
 const app = express();
+
+// Ensure schema exists before any request is handled.
+// initDb() is idempotent and resolves immediately after first call.
+app.use((_req, _res, next) => {
+  initDb().then(() => next()).catch(next);
+});
 
 app.use(express.json());
 app.use(

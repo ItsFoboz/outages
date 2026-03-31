@@ -4,16 +4,15 @@ import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// On Vercel only /tmp is writable. The DB is ephemeral (wiped on cold-start);
-// Vercel Cron re-populates it every 30 min via POST /api/refresh.
+// On Vercel only /tmp is writable. DB is ephemeral (wiped on cold-start);
+// POST /api/refresh re-populates it (call manually or via Vercel Cron on Pro).
 const DB_URL = process.env.VERCEL
   ? "file:/tmp/outages.db"
   : `file:${join(__dirname, "..", "outages.db")}`;
 
 const db = createClient({ url: DB_URL });
 
-// Initialize schema. Top-level await is valid in ESM (Node 16+).
-await db.executeMultiple(`
+const SCHEMA = `
   CREATE TABLE IF NOT EXISTS outages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL,
@@ -46,6 +45,17 @@ await db.executeMultiple(`
   CREATE INDEX IF NOT EXISTS idx_outages_status ON outages(status);
   CREATE INDEX IF NOT EXISTS idx_outages_geocoded ON outages(geocoded);
   CREATE INDEX IF NOT EXISTS idx_scrape_log_source ON scrape_log(source);
-`);
+`;
+
+// Lazily-resolved initialization promise — safe with Vercel bundler.
+// No top-level await; caller uses `await initDb()` before first query.
+let _initPromise = null;
+
+export async function initDb() {
+  if (!_initPromise) {
+    _initPromise = db.executeMultiple(SCHEMA);
+  }
+  return _initPromise;
+}
 
 export default db;
