@@ -3,7 +3,11 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(__dirname, "..", "outages.db");
+// On Vercel, only /tmp is writable. The DB is ephemeral (wiped on cold-start)
+// but the Vercel Cron job re-populates it every 30 minutes via POST /api/refresh.
+const DB_PATH = process.env.VERCEL
+  ? "/tmp/outages.db"
+  : join(__dirname, "..", "outages.db");
 
 const db = new Database(DB_PATH);
 

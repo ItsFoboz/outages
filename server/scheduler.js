@@ -115,9 +115,12 @@ export async function runAllScrapers() {
   console.log(`[scheduler] Scrape cycle complete at ${new Date().toISOString()}`);
 }
 
-// Schedule: every 30 minutes
-cron.schedule("*/30 * * * *", () => {
-  runAllScrapers().catch((e) => console.error("[cron] Error:", e));
-});
-
-console.log("[scheduler] Cron job scheduled (every 30 minutes)");
+// On Vercel there is no persistent process, so node-cron never fires.
+// Instead, vercel.json configures a Vercel Cron job that calls
+// POST /api/refresh every 30 minutes.
+if (!process.env.VERCEL) {
+  cron.schedule("*/30 * * * *", () => {
+    runAllScrapers().catch((e) => console.error("[cron] Error:", e));
+  });
+  console.log("[scheduler] Cron job scheduled (every 30 minutes)");
+}
