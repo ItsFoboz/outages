@@ -7,7 +7,7 @@ import "./index.css";
 const mapsKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 if (mapsKey) {
   const script = document.createElement("script");
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${mapsKey}&loading=async`;
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${mapsKey}`;
   script.async = true;
   document.head.appendChild(script);
 }
